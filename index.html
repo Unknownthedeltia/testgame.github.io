@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Number Battle Game</title>
+    <style>
+        body { display: flex; flex-direction: column; align-items: center; font-family: Arial, sans-serif; }
+        .container { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+        .board { 
+            display: grid; 
+            grid-template-columns: repeat(6, 50px); 
+            gap: 2px; 
+            padding: 10px; 
+            background: #ccc; 
+            margin: 20px; 
+            position: relative; 
+        }
+        .cell { 
+            width: 50px; 
+            height: 50px; 
+            background: white; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            cursor: pointer; 
+            border: 1px solid #999; 
+            position: relative; 
+            z-index: 1; 
+        }
+        .cell:hover { background: #eee; }
+        .selected { background: yellow !important; }
+        .highlight { border: 2px dashed green; }
+        .piece { 
+            transition: all 0.3s; 
+            font-size: 20px; 
+            width: 40px; 
+            height: 40px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2); 
+            color: white; 
+            position: relative; 
+            z-index: 2; 
+        }
+        .piece:hover { transform: scale(1.1); }
+        .piece.draggable { cursor: move; padding: 5px; }
+        .piece.combined::after { 
+            content: attr(data-combine); 
+            font-size: 12px; 
+            position: absolute; 
+            bottom: -5px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            color: #fff; 
+            background: rgba(0,0,0,0.8); 
+            padding: 2px 6px; 
+            border-radius: 3px; 
+            white-space: nowrap; 
+            z-index: 3; 
+        }
+        .piece-container { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; border: 1px solid #ccc; }
+        .player-panel { margin: 10px; }
+        .game-over { 
+            position: fixed; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            background: rgba(0,0,0,0.8); 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+        }
+        .blink { animation: blink 0.5s; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+        @keyframes slide { from { transform: translate(0); } to { transform: translate(50px, 0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="p1Panel" class="player-panel">
+            <h3>プレイヤー1 / Player 1</h3>
+            <div id="p1Pieces" class="piece-container"></div>
+            <button id="p1Done" style="display:none;">プレイヤー1 配置完了 / Player 1 Done</button>
+        </div>
+        <div id="gameBoard" class="board"></div>
+        <div id="p2Panel" class="player-panel">
+            <h3>プレイヤー2 / Player 2</h3>
+            <div id="p2Pieces" class="piece-container"></div>
+            <button id="p2Done" style="display:none;">プレイヤー2 配置完了 / Player 2 Done</button>
+        </div>
+        <div class="button-panel">
+            <button id="randomSetup">ランダム配置 / Random Setup</button>
+            <button id="combine" disabled>合成 / Combine</button>
+            <button id="split" disabled>分離 / Split</button>
+            <button id="saveGame">保存 / Save</button>
+            <button id="loadGame">再開 / Load</button>
+            <button id="testScenario">テスト / Test</button>
+            <button id="switchLang">English / 日本語</button>
+        </div>
+        <div id="status"></div>
+        <div id="score">P1: 0 - P2: 0</div>
+        <div id="customizePanel">
+            <label>P1色 / P1 Color: <input type="color" id="p1Color" value="#0000FF"></label>
+            <label>P2色 / P2 Color: <input type="color" id="p2Color" value="#FF0000"></label>
+            <label>ボード色 / Board Color: <input type="color" id="boardColor" value="#CCCCCC"></label>
+            <label>駒サイズ / Piece Size: <input type="range" id="pieceSize" min="10" max="30" value="20"></label>
+            <label>アニメーション / Animation: <input type="checkbox" id="animationToggle" checked></label>
+            <label>時間制限 / Time Limit (s): <input type="number" id="timeLimit" min="0" value="0"></label>
+            <span id="timer" style="display:none;">0</span>
+        </div>
+        <div id="gameOver" class="game-over" style="display:none;">
+            <h2 id="result"></h2>
+            <button id="replayCustomize">カスタマイズしてリプレイ / Customize & Replay</button>
+            <button id="replayNow">そのままリプレイ / Replay Now</button>
+          
+        
+        </div>
+    </div>
+
+    <script>
+        let lang = 'ja';
+        const texts = {
+            ja: { turn: 'プレイヤー{0}のターン', win: 'プレイヤー{0}の勝ち！', draw: '引き分け！', end: 'ターン終了', setupDone: 'プレイヤー{0}が配置を完了しました', alreadyCombined: 'この駒はすでに合成済みです', splitChoose: 'どちらを移動させますか？（1: {0}, 2: {1}）' },
+            en: { turn: 'Player {0}\'s turn', win: 'Player {0} wins!', draw: 'Draw!', end: 'Turn ended', setupDone: 'Player {0} has finished setup', alreadyCombined: 'This piece is already combined', splitChoose: 'Which piece to move? (1: {0}, 2: {1})' }
+        };
+        let gameState = 'setup', currentPlayer = 1, board = Array(6).fill().map(() => Array(6).fill(null));
+        let p1Ready = false, p2Ready = false, selectedPieces = [], scores = JSON.parse(localStorage.getItem('scores')) || {p1: 0, p2: 0};
+        let timer, timeLimit = 0, useAnimation = true;
+        let p1Pieces = [0,1,2,3,4,5,6,7,8,9], p2Pieces = [0,1,2,3,4,5,6,7,8,9];
+
+        const sounds = {
+            move: new Audio('https://freesound.org/data/previews/270/270128_2015289-lq.mp3'),
+            combine: new Audio('https://freesound.org/data/previews/270/270129_2015289-lq.mp3'),
+            split: new Audio('https://freesound.org/data/previews/270/270130_2015289-lq.mp3'),
+            win: new Audio('https://freesound.org/data/previews/270/270131_2015289-lq.mp3')
+        };
+
+        function initGame() {
+            alert(lang === 'ja' ? 'これは試作品です。最終的に完成するものと異なります。6×6マスで2人対戦。相手の0を取ると勝ち。' : '6×6 grid, 2 players. Win by taking opponent\'s 0.');
+            document.getElementById('score').textContent = `P1: ${scores.p1} - P2: ${scores.p2}`;
+            renderBoard();
+            renderPieces();
+            setupEventListeners();
+        }
+
+        function renderBoard() {
+            const gameBoard = document.getElementById('gameBoard');
+            gameBoard.innerHTML = '';
+            gameBoard.style.background = document.getElementById('boardColor').value;
+            for(let y = 0; y < 6; y++) {
+                for(let x = 0; x < 6; x++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.x = x;
+                    cell.dataset.y = y;
+                    cell.addEventListener('dragover', e => e.preventDefault());
+                    cell.addEventListener('drop', handleDrop);
+                    cell.addEventListener('click', handleClick);
+                    if(board[y][x]) {
+                        cell.innerHTML = `<span class="piece player${board[y][x].player}${board[y][x].combined ? ' combined' : ''}" ${board[y][x].combined ? `data-combine="${board[y][x].combineText}"` : ''}>${board[y][x].num}</span>`;
+                    }
+                    gameBoard.appendChild(cell);
+                }
+            }
+            updateCustomization();
+        }
+
+        function renderPieces() {
+            const p1Container = document.getElementById('p1Pieces');
+            const p2Container = document.getElementById('p2Pieces');
+            p1Container.innerHTML = '';
+            p2Container.innerHTML = '';
+            p1Pieces.forEach(num => {
+                const piece = document.createElement('div');
+                piece.className = 'piece draggable player1';
+                piece.draggable = true;
+                piece.textContent = num;
+                piece.dataset.num = num;
+                piece.addEventListener('dragstart', e => e.dataTransfer.setData('text', num));
+                p1Container.appendChild(piece);
+            });
+            p2Pieces.forEach(num => {
+                const piece = document.createElement('div');
+                piece.className = 'piece draggable player2';
+                piece.draggable = true;
+                piece.textContent = num;
+                piece.dataset.num = num;
+                piece.addEventListener('dragstart', e => e.dataTransfer.setData('text', num));
+                p2Container.appendChild(piece);
+            });
+            document.getElementById('p1Done').style.display = 'block';
+            document.getElementById('p2Done').style.display = 'block';
+            updateCustomization();
+        }
+
+        function updateCustomization() {
+            document.querySelectorAll('.player1').forEach(el => {
+                el.style.backgroundColor = document.getElementById('p1Color').value;
+                el.style.color = 'white';
+            });
+            document.querySelectorAll('.player2').forEach(el => {
+                el.style.backgroundColor = document.getElementById('p2Color').value;
+                el.style.color = 'white';
+            });
+            document.querySelectorAll('.piece').forEach(el => el.style.fontSize = `${document.getElementById('pieceSize').value}px`);
+            useAnimation = document.getElementById('animationToggle').checked;
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            if(gameState !== 'setup') return;
+            const num = parseInt(e.dataTransfer.getData('text'));
+            const x = parseInt(e.target.dataset.x), y = parseInt(e.target.dataset.y);
+            if(!board[y][x] && ((currentPlayer === 1 && y < 2) || (currentPlayer === 2 && y > 3))) {
+                board[y][x] = {num, player: currentPlayer};
+                const pieces = currentPlayer === 1 ? p1Pieces : p2Pieces;
+                pieces.splice(pieces.indexOf(num), 1);
+                renderBoard();
+                renderPieces();
+            }
+        }
+
+        function handleClick(e) {
+            if(gameState !== 'playing') return;
+            const cell = e.target.closest('.cell');
+            if(!cell) return;
+            const x = parseInt(cell.dataset.x);
+            const y = parseInt(cell.dataset.y);
+            console.log(`Clicked: (${x}, ${y})`);
+            moveOrSelect(x, y);
+        }
+
+        function moveOrSelect(x, y) {
+            const piece = board[y][x];
+            if(piece && piece.player === currentPlayer) {
+                if(selectedPieces.some(p => p.x === x && p.y === y)) {
+                    selectedPieces = selectedPieces.filter(p => p.x !== x || p.y !== y);
+                    document.querySelector(`[data-x="${x}"][data-y="${y}"]`).classList.remove('selected');
+                } else if(selectedPieces.length < 2) {
+                    selectedPieces.push({x, y, num: piece.num, combined: piece.combined || false, combineText: piece.combineText || ''});
+                    document.querySelector(`[data-x="${x}"][data-y="${y}"]`).classList.add('selected');
+                }
+                document.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+                if(selectedPieces.length === 1) showMoveOptions(x, y);
+            } else if(selectedPieces.length === 1) {
+                const from = selectedPieces[0];
+                if(isValidMove(from, x, y)) {
+                    movePiece(from, x, y);
+                    selectedPieces = [];
+                    document.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+                    document.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+                    endTurn();
+                }
+            }
+            document.getElementById('combine').disabled = selectedPieces.length !== 2 || selectedPieces.some(p => p.combined);
+            document.getElementById('split').disabled = selectedPieces.length !== 1 || !selectedPieces[0].combined;
+        }
+
+        function showMoveOptions(x, y) {
+            const directions = [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]];
+            directions.forEach(([dx, dy]) => {
+                const newX = x + dx, newY = y + dy;
+                if(newX >= 0 && newX < 6 && newY >= 0 && newY < 6) {
+                    if(isValidMove({x, y, num: board[y][x].num}, newX, newY)) {
+                        document.querySelector(`[data-x="${newX}"][data-y="${newY}"]`).classList.add('highlight');
+                        console.log(`Highlight: (${newX}, ${newY})`);
+                    }
+                }
+            });
+        }
+
+        function isValidMove(from, toX, toY) {
+            const toPiece = board[toY][toX];
+            const dx = Math.abs(toX - from.x), dy = Math.abs(toY - from.y);
+            if(dx > 1 || dy > 1 || (dx === 0 && dy === 0)) return false;
+            if(toPiece) {
+                if(toPiece.player === currentPlayer) return false;
+                if(from.num === 1 && toPiece.num >= 12) return true;
+                if(from.num === toPiece.num) return false;
+                return from.num > toPiece.num;
+            }
+            return true;
+        }
+
+        function movePiece(from, toX, toY) {
+            const cell = document.querySelector(`[data-x="${toX}"][data-y="${toY}"]`);
+            if(useAnimation) cell.style.animation = 'slide 0.3s';
+            if(board[toY][toX] && board[toY][toX].num === 0) endGame(currentPlayer);
+            board[toY][toX] = {num: from.num, player: currentPlayer, combined: from.combined, combineText: from.combineText};
+            board[from.y][from.x] = null;
+            sounds.move.play();
+            renderBoard();
+        }
+
+        function combinePieces() {
+            if(selectedPieces.length === 2) {
+                if(selectedPieces.some(p => p.combined)) {
+                    alert(texts[lang].alreadyCombined);
+                    return;
+                }
+                const sum = selectedPieces[0].num + selectedPieces[1].num;
+                const combineText = `${selectedPieces[0].num}+${selectedPieces[1].num}`;
+                board[selectedPieces[0].y][selectedPieces[0].x] = {num: sum, player: currentPlayer, combined: true, combineText};
+                board[selectedPieces[1].y][selectedPieces[1].x] = null;
+                selectedPieces = [];
+                document.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+                sounds.combine.play();
+                renderBoard();
+                endTurn();
+            }
+        }
+
+        function splitPiece() {
+            if(selectedPieces.length === 1 && selectedPieces[0].combined) {
+                console.log('Splitting piece:', selectedPieces[0]);
+                const combineText = selectedPieces[0].combineText;
+                const nums = combineText.split('+').map(Number);
+                const choice = prompt(texts[lang].splitChoose.replace('{0}', nums[0]).replace('{1}', nums[1]));
+                let stayNum, moveNum;
+                if(choice === '1') {
+                    stayNum = nums[0];
+                    moveNum = nums[1];
+                } else if(choice === '2') {
+                    stayNum = nums[1];
+                    moveNum = nums[0];
+                } else {
+                    alert(lang === 'ja' ? '有効な選択ではありません' : 'Invalid choice');
+                    return;
+                }
+                board[selectedPieces[0].y][selectedPieces[0].x] = {num: stayNum, player: currentPlayer};
+                showSplitMoveOptions(selectedPieces[0].x, selectedPieces[0].y, moveNum);
+                sounds.split.play();
+            }
+        }
+
+        function showSplitMoveOptions(x, y, num) {
+            console.log('Showing split move options for:', x, y, num);
+            const directions = [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]];
+            directions.forEach(([dx, dy]) => {
+                const newX = x + dx, newY = y + dy;
+                if(newX >= 0 && newX < 6 && newY >= 0 && newY < 6) {
+                    const cell = document.querySelector(`[data-x="${newX}"][data-y="${newY}"]`);
+                    if(!board[newY][newX] || board[newY][newX].player !== currentPlayer) {
+                        cell.classList.add('highlight');
+                        cell.onclick = () => {
+                            console.log('Split move clicked:', newX, newY);
+                            splitMoveTo(newX, newY, num, x, y);
+                        };
+                    }
+                }
+            });
+        }
+
+        function splitMoveTo(toX, toY, num, fromX, fromY) {
+            board[toY][toX] = {num, player: currentPlayer};
+            selectedPieces = [];
+            document.querySelectorAll('.highlight').forEach(el => {
+                el.classList.remove('highlight');
+                el.onclick = null;
+            });
+            renderBoard();
+            endTurn();
+        }
+
+        function showMoveOptions(x, y) {
+            const directions = [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]];
+            directions.forEach(([dx, dy]) => {
+                const newX = x + dx, newY = y + dy;
+                if(newX >= 0 && newX < 6 && newY >= 0 && newY < 6) {
+                    if(isValidMove({x, y, num: board[y][x].num}, newX, newY)) {
+                        document.querySelector(`[data-x="${newX}"][data-y="${newY}"]`).classList.add('highlight');
+                        console.log(`Highlight: (${newX}, ${newY})`);
+                    }
+                }
+            });
+        }
+
+        function checkDraw() {
+            const p1Count = board.flat().filter(p => p?.player === 1).length;
+            const p2Count = board.flat().filter(p => p?.player === 2).length;
+            if(p1Count <= 2 && p2Count <= 2) {
+                document.getElementById('result').textContent = texts[lang].draw;
+                document.getElementById('gameOver').style.display = 'block';
+            }
+        }
+
+        function endGame(winner) {
+            scores[`p${winner}`]++;
+            localStorage.setItem('scores', JSON.stringify(scores));
+            document.getElementById('score').textContent = `P1: ${scores.p1} - P2: ${scores.p2}`;
+            document.getElementById('result').textContent = texts[lang].win.replace('{0}', winner);
+            document.getElementById('gameOver').style.display = 'block';
+            sounds.win.play();
+        }
+
+        function startTurn() {
+            document.getElementById('status').textContent = texts[lang].turn.replace('{0}', currentPlayer);
+            document.getElementById('combine').disabled = true;
+            document.getElementById('split').disabled = true;
+            if(timeLimit > 0) startTimer();
+        }
+
+        function startTimer() {
+            let time = timeLimit;
+            document.getElementById('timer').style.display = 'inline';
+            document.getElementById('timer').textContent = time;
+            clearInterval(timer);
+            timer = setInterval(() => {
+                time--;
+                document.getElementById('timer').textContent = time;
+                if(time <= 0) endTurn();
+            }, 1000);
+        }
+
+        function endTurn() {
+            clearInterval(timer);
+            document.getElementById('timer').style.display = 'none';
+            document.getElementById('gameBoard').classList.add('blink');
+            setTimeout(() => {
+                document.getElementById('gameBoard').classList.remove('blink');
+                switchPlayer();
+                startTurn();
+                checkDraw();
+            }, 500);
+            document.getElementById('status').textContent = texts[lang].end;
+        }
+
+        function switchPlayer() {
+            currentPlayer = currentPlayer === 1 ? 2 : 1;
+        }
+
+        function randomSetup() {
+            board = Array(6).fill().map(() => Array(6).fill(null));
+            p1Pieces = [0,1,2,3,4,5,6,7,8,9];
+            p2Pieces = [0,1,2,3,4,5,6,7,8,9];
+            const p1Positions = [], p2Positions = [];
+            while(p1Positions.length < 10) {
+                const pos = [Math.floor(Math.random() * 2), Math.floor(Math.random() * 6)];
+                if(!p1Positions.some(p => p[0] === pos[0] && p[1] === pos[1])) p1Positions.push(pos);
+            }
+            while(p2Positions.length < 10) {
+                const pos = [4 + Math.floor(Math.random() * 2), Math.floor(Math.random() * 6)];
+                if(!p2Positions.some(p => p[0] === pos[0] && p[1] === pos[1])) p2Positions.push(pos);
+            }
+            p1Positions.forEach((pos, i) => board[pos[0]][pos[1]] = {num: p1Pieces[i], player: 1});
+            p2Positions.forEach((pos, i) => board[pos[0]][pos[1]] = {num: p2Pieces[i], player: 2});
+            p1Pieces.length = 0; p2Pieces.length = 0;
+            renderBoard();
+            renderPieces();
+        }
+
+        function setupEventListeners() {
+            document.getElementById('p1Done').addEventListener('click', () => { 
+                p1Ready = true; 
+                document.getElementById('status').textContent = texts[lang].setupDone.replace('{0}', 1);
+                checkSetupComplete(); 
+            });
+            document.getElementById('p2Done').addEventListener('click', () => { 
+                p2Ready = true; 
+                document.getElementById('status').textContent = texts[lang].setupDone.replace('{0}', 2);
+                checkSetupComplete(); 
+            });
+            document.getElementById('randomSetup').addEventListener('click', randomSetup);
+            document.getElementById('combine').addEventListener('click', combinePieces);
+            document.getElementById('split').addEventListener('click', splitPiece);
+            document.getElementById('saveGame').addEventListener('click', () => {
+                localStorage.setItem('numberBattleSave', JSON.stringify({board, currentPlayer, scores}));
+                alert(lang === 'ja' ? '保存しました' : 'Saved');
+            });
+            document.getElementById('loadGame').addEventListener('click', () => {
+                const saved = localStorage.getItem('numberBattleSave');
+                if(saved) {
+                    const data = JSON.parse(saved);
+                    board = data.board;
+                    currentPlayer = data.currentPlayer;
+                    scores = data.scores;
+                    gameState = 'playing';
+                    renderBoard();
+                    startTurn();
+                }
+            });
+            document.getElementById('testScenario').addEventListener('click', () => {
+                board = Array(6).fill().map(() => Array(6).fill(null));
+                board[0][0] = {num: 1, player: 1};
+                board[5][5] = {num: 0, player: 2};
+                gameState = 'playing';
+                p1Ready = p2Ready = true;
+                document.getElementById('p1Panel').style.display = 'none';
+                document.getElementById('p2Panel').style.display = 'none';
+                renderBoard();
+                startTurn();
+            });
+            document.getElementById('switchLang').addEventListener('click', () => {
+                lang = lang === 'ja' ? 'en' : 'ja';
+                document.getElementById('switchLang').textContent = lang === 'ja' ? 'English' : '日本語';
+                startTurn();
+            });
+            document.getElementById('replayCustomize').addEventListener('click', () => {
+                gameState = 'setup';
+                p1Ready = p2Ready = false;
+                board = Array(6).fill().map(() => Array(6).fill(null));
+                p1Pieces = [0,1,2,3,4,5,6,7,8,9];
+                p2Pieces = [0,1,2,3,4,5,6,7,8,9];
+                document.getElementById('gameOver').style.display = 'none';
+                document.getElementById('p1Panel').style.display = 'block';
+                document.getElementById('p2Panel').style.display = 'block';
+                renderBoard();
+                renderPieces();
+            });
+            document.getElementById('replayNow').addEventListener('click', () => {
+                board = Array(6).fill().map(() => Array(6).fill(null));
+                randomSetup();
+                gameState = 'playing';
+                document.getElementById('gameOver').style.display = 'none';
+                document.getElementById('p1Panel').style.display = 'none';
+                document.getElementById('p2Panel').style.display = 'none';
+                startTurn();
+            });
+            document.getElementById('timeLimit').addEventListener('change', () => {
+                timeLimit = parseInt(document.getElementById('timeLimit').value) || 0;
+            });
+            ['p1Color', 'p2Color', 'boardColor', 'pieceSize', 'animationToggle'].forEach(id => {
+                document.getElementById(id).addEventListener('change', updateCustomization);
+            });
+        }
+
+        function checkSetupComplete() {
+            if(p1Ready && p2Ready) {
+                gameState = 'playing';
+                document.getElementById('p1Panel').style.display = 'none';
+                document.getElementById('p2Panel').style.display = 'none';
+                startTurn();
+            }
+        }
+
+        initGame();
+    </script>
+</body>
+</html>
